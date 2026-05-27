@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stromzähler Tracker</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f7f6;
+            color: #333;
+        }
+        h1, h2 {
+            color: #2c3e50;
+        }
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            margin-bottom: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            box-sizing: border-box;
+            font-size: 16px;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button.danger {
+            background-color: #dc3545;
+            margin-top: 20px;
+        }
+        button.danger:hover {
+            background-color: #c82333;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f8f9fa;
+        }
+        canvas {
+            max-width: 100%;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>⚡ Stromzähler Tracker</h1>
+
+    <div class="card">
+        <h2>Neuen Zählerstand eintragen</h2>
+        <form id="entryForm">
+            <div class="form-group">
+                <label for="date">Datum:</label>
+                <input type="date" id="date" required>
+            </div>
+            <div class="form-group">
+                <label for="reading">Zählerstand (kWh):</label>
+                <input type="number" step="0.1" id="reading" placeholder="z.B. 45231.5" required>
+            </div>
+            <button type="submit">Eintrag speichern</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Verbrauchsdiagramm (Täglich)</h2>
+        <canvas id="consumptionChart"></canvas>
+    </div>
+
+    <div class="card">
+        <h2>Verlauf</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Datum</th>
+                    <th>Zählerstand</th>
+                    <th>Verbrauch</th>
+                    <th>Aktion</th>
+                </tr>
+            </thead>
+            <tbody id="historyTableBody">
+                </tbody>
+        </table>
+        <button class="danger" onclick="clearData()">Alle Daten löschen</button>
+    </div>
+
+    <script>
+        let myChart = null;
+
+        // Setzt das Datum-Feld auf den heutigen Tag
+        document.getElementById('date').valueAsDate = new Date();
+
+        // Lädt gespeicherte Daten aus dem LocalStorage des Browsers
+        function loadData() {
+            const data = localStorage.getItem('stromdaten');
+            return data ? JSON.parse(data) : [];
+        }
+
+        // Speichert Daten in den LocalStorage
+        function saveData(data) {
+            // Nach Datum aufsteigend sortieren
+            data.sort((a, b) => new Date(a.date) - new Date(b.date));
+            localStorage.setItem('stromdaten', JSON.stringify(data));
+        }
+
+        // Berechnet den täglichen Verbrauch aus der Differenz zum Vortag
+        function calculateConsumption(data) {
+            let processedData = [];
+            for (let i = 0; i < data.length; i++) {
+                let consumption = 0;
+                if (i > 0) {
+                    consumption = (data[i].reading - data[i-1].reading).toFixed(1);
+                    // Vermeide negative Werte bei Fehlern
+                    if (consumption < 0) consumption = 0; 
+                }
+                processedData.push({
+                    id: data[i].id,
+                    date: data[i].date,
+                    reading: data[i].reading,
+                    consumption: consumption
+                });
+            }
+            return processedData;
+        }
+
+        // Aktualisiert die Tabelle und das Diagramm
+        function renderUI() {
+            const rawData = loadData();
+            const data = calculateConsumption(rawData);
+            
+            const tbody = document.getElementById('historyTableBody');
+            tbody.innerHTML = '';
+
+            let dates = [];
+            let consumptions = [];
+
+            // Tabelle rückwärts aufbauen (neueste oben)
+            [...data].reverse().forEach((entry) => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${new Date(entry.date).toLocaleDateString('de-DE')}</td>
+                    <td>${entry.reading} kWh</td>
+                    <td><strong>${entry.consumption > 0 ? '+' + entry.consumption : entry.consumption} kWh</strong></td>
+                    <td><button style="padding: 5px; font-size: 12px; background: #6c757d;" onclick="deleteEntry(${entry.id})">Löschen</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            // Daten für das Diagramm (chronologisch)
+            data.forEach(entry => {
+                if(entry.consumption > 0) { // Nur Tage mit echtem Verbrauch anzeigen
+                    dates.push(new Date(entry.date).toLocaleDateString('de-DE'));
+                    consumptions.push(entry.consumption);
+                }
+            });
+
+            updateChart(dates, consumptions);
+        }
+
+        // Diagramm zeichnen / aktualisieren
+        function updateChart(labels, data) {
+            const ctx = document.getElementById('consumptionChart').getContext('2d');
+            
+            if (myChart) {
+                myChart.destroy();
+            }
+
+            myChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Tagesverbrauch (kWh)',
+                        data: data,
+                        backgroundColor: '#007bff',
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+
+        // Neuen Eintrag hinzufügen
+        document.getElementById('entryForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const date = document.getElementById('date').value;
+            const reading = parseFloat(document.getElementById('reading').value);
+
+            const data = loadData();
+            
+            // Check ob Datum schon existiert
+            const existingIndex = data.findIndex(d => d.date === date);
+            if (existingIndex > -1) {
+                data[existingIndex].reading = reading;
+            } else {
+                data.push({
+                    id: Date.now(),
+                    date: date,
+                    reading: reading
+                });
+            }
+
+            saveData(data);
+            renderUI();
+            
+            // Fokus zurück aufs Eingabefeld setzen
+            document.getElementById('reading').value = '';
+            document.getElementById('reading').focus();
+        });
+
+        // Einzelnen Eintrag löschen
+        function deleteEntry(id) {
+            if(confirm('Diesen Eintrag wirklich löschen?')) {
+                let data = loadData();
+                data = data.filter(entry => entry.id !== id);
+                saveData(data);
+                renderUI();
+            }
+        }
+
+        // Komplette Daten löschen
+        function clearData() {
+            if(confirm('ACHTUNG: Willst du wirklich alle gespeicherten Daten löschen?')) {
+                localStorage.removeItem('stromdaten');
+                renderUI();
+            }
+        }
+
+        // Initiale Darstellung beim Laden
+        renderUI();
+    </script>
+</body>
+</html>
